@@ -1275,58 +1275,186 @@ std::shared_ptr<Fast::Texture> Interpreter::LoadPaletteVariant(const RawTexMetad
     return variant;
 }
 
+// The bytes of a tile's replacement its load covers, to the end when it reaches the last row.
+void Interpreter::LoadedImageSpan(int tile, size_t imageSize, size_t& begin, size_t& end) const {
+    const auto& loaded = mRdp->loaded_texture[mRdp->texture_tile[tile].tmem_index];
+    const uint8_t* start = loaded.raw_tex_metadata.resource->ImageData;
+    begin = 0;
+    end = imageSize;
+    if (loaded.addr < start || loaded.addr >= start + imageSize || loaded.line_size_bytes == 0 ||
+        loaded.full_image_line_size_bytes < loaded.line_size_bytes) {
+        return;
+    }
+    const uint32_t rows = loaded.size_bytes / loaded.line_size_bytes;
+    const size_t offset = loaded.addr - start;
+    const size_t span = rows > 0 ? (size_t)(rows - 1) * loaded.full_image_line_size_bytes + loaded.line_size_bytes : 0;
+    begin = offset & ~(size_t)3;
+    end = std::min(imageSize, (offset + span + 3) & ~(size_t)3);
+    if (imageSize - end < loaded.full_image_line_size_bytes) {
+        end = imageSize;
+    }
+}
+
+// `tlut` when the pack has art for a tile's raster under that palette, else empty.
+std::string Interpreter::PaletteArtName(const RawTexMetadata* metadata, const std::string& tlut) {
+    ListAltFiles();
+    return std::binary_search(mAltFiles.begin(), mAltFiles.end(), PaletteVariantPath(metadata, tlut)) ? tlut
+                                                                                                       : std::string();
+}
+
+// A tile's lerp by the art it mixes (empty for the base), ordered so either direction keys alike.
+bool Interpreter::TileBlendEnds(const RawTexMetadata* metadata, int tile, std::string& from, std::string& to,
+                                int& steps) {
+    const auto& tt = mRdp->texture_tile[tile];
+    if (tt.fmt != G_IM_FMT_CI || (tt.siz != G_IM_SIZ_4b && tt.siz != G_IM_SIZ_8b)) {
+        return false;
+    }
+    const PaletteBlend& blend = mTlutBlend[tt.siz == G_IM_SIZ_4b ? (tt.palette & 15) : 0];
+    if (blend.to.empty() || !HasHdReplacement(metadata)) {
+        return false;
+    }
+    from = PaletteArtName(metadata, blend.from);
+    to = PaletteArtName(metadata, blend.to);
+    steps = (blend.alpha * 31 + 127) / 255;
+    if (to < from) {
+        std::swap(from, to);
+        steps = 31 - steps;
+    }
+    return true;
+}
+
+// Cache key for the HD mix or shift a CI tile is drawn through; 0 for none.
+uint32_t Interpreter::TilePaletteVariantId(int tile) {
+    const auto& tt = mRdp->texture_tile[tile];
+    const RawTexMetadata* metadata = &mRdp->loaded_texture[tt.tmem_index].raw_tex_metadata;
+    const bool standIn = IsPaletteStandIn(metadata);
+    const std::hash<std::string> hash;
+    uint64_t id;
+    std::string from, to;
+    int steps;
+    if (TileBlendEnds(metadata, tile, from, to, steps)) {
+        if (standIn && (from.empty() || to.empty())) {
+            return 0;
+        }
+        if (from == to || steps == 0 || steps == 31) {
+            id = (uint64_t)hash(steps == 31 ? to : from) * 31 + 0x5A;
+        } else {
+            id = ((uint64_t)hash(from) * 31 + hash(to)) * 31 + steps;
+        }
+    } else {
+        if (tt.fmt != G_IM_FMT_CI || (tt.siz != G_IM_SIZ_4b && tt.siz != G_IM_SIZ_8b) || !HasHdReplacement(metadata)) {
+            return 0;
+        }
+        const PaletteTint& tint = mTlutTint[tt.siz == G_IM_SIZ_4b ? (tt.palette & 15) : 0];
+        if (tint.base.empty()) {
+            return 0;
+        }
+        const std::string base = PaletteArtName(metadata, tint.base);
+        if (standIn && base.empty()) {
+            return 0;
+        }
+        id = (uint64_t)hash(base) * 31 + 0x9E37;
+        for (int c = 0; c < 3; c++) {
+            id = id * 31 + tint.mul[c];
+            id = id * 31 + (uint8_t)tint.add[c];
+        }
+    }
+    return (uint32_t)(id ^ (id >> 32)) | 1;
+}
+
 // The HD art for a tile drawn through a palette the game lerps between two named ones:
 // each end's variant (the base where the pack has none) mixed by the same alpha. nullptr
 // when the tile is not drawn through such a palette, or both ends are the base.
 const uint8_t* Interpreter::BlendPaletteVariants(const RawTexMetadata* metadata, int tile) {
-    const auto& tt = mRdp->texture_tile[tile];
-    if (tt.fmt != G_IM_FMT_CI || (tt.siz != G_IM_SIZ_4b && tt.siz != G_IM_SIZ_8b)) {
+    std::string fromName, toName;
+    int steps;
+    if (!TileBlendEnds(metadata, tile, fromName, toName, steps)) {
         return nullptr;
     }
-    const PaletteBlend& blend = mTlutBlend[tt.siz == G_IM_SIZ_4b ? (tt.palette & 15) : 0];
-    if (blend.to.empty() || !HasHdReplacement(metadata)) {
-        return nullptr;
-    }
-    const auto from = LoadPaletteVariant(metadata, blend.from);
-    const auto to = LoadPaletteVariant(metadata, blend.to);
+    const auto from = fromName.empty() ? nullptr : LoadPaletteVariant(metadata, fromName);
+    const auto to = toName.empty() ? nullptr : LoadPaletteVariant(metadata, toName);
     // A stand-in's art belongs to one palette, so it can't fill in for a missing end.
     if (IsPaletteStandIn(metadata) && (from == nullptr || to == nullptr)) {
         return nullptr;
     }
     const uint8_t* a = from != nullptr ? from->ImageData : metadata->resource->ImageData;
     const uint8_t* b = to != nullptr ? to->ImageData : metadata->resource->ImageData;
-    if (a == b) {
+    if (fromName == toName || a == b) {
         return nullptr;
     }
-    if (blend.alpha == 0) {
+    if (steps == 0) {
         return a;
     }
-    if (blend.alpha == 255) {
+    if (steps == 31) {
         return b;
     }
+    const int alpha = (steps * 255 + 15) / 31;
     const size_t size = metadata->resource->ImageDataSize;
+    size_t begin, end;
+    LoadedImageSpan(tile, size, begin, end);
     mPaletteBlendBuffer.resize(size);
-    for (size_t i = 0; i < size; i++) {
-        mPaletteBlendBuffer[i] = (uint8_t)((a[i] * (255 - blend.alpha) + b[i] * blend.alpha) / 255);
+    for (size_t i = begin; i < end; i++) {
+        mPaletteBlendBuffer[i] = (uint8_t)((a[i] * (255 - alpha) + b[i] * alpha) / 255);
     }
     return mPaletteBlendBuffer.data();
 }
 
-// Records the lerp for the frame; the TLUT load of that palette picks it up. Its
-// colors move with the alpha, so what was drawn through it before is dropped.
+// Records the lerp for the frame; the TLUT load of that palette picks it up.
 void Interpreter::SetPaletteBlend(const uint8_t* palette, const char* from, const char* to, uint8_t alpha) {
     PaletteBlend& blend = mPaletteBlends[palette];
-    if (blend.alpha != alpha || blend.from != from || blend.to != to) {
-        TextureCacheDeleteByPalette(palette);
-        blend.from = from;
-        blend.to = to;
-        blend.alpha = alpha;
-    }
+    blend.from = from;
+    blend.to = to;
+    blend.alpha = alpha;
     blend.frame = mCustomFrameCount;
 }
 
 void Interpreter::SetPaletteMask(const uint8_t* palette, uint8_t opaque, uint8_t transparent) {
     mPaletteMasks[palette] = { opaque, transparent, mCustomFrameCount };
+}
+
+// The HD art for a tile drawn through a shift of a named palette, or nullptr.
+const uint8_t* Interpreter::TintPaletteVariant(const RawTexMetadata* metadata, int tile) {
+    const auto& tt = mRdp->texture_tile[tile];
+    if (tt.fmt != G_IM_FMT_CI || (tt.siz != G_IM_SIZ_4b && tt.siz != G_IM_SIZ_8b)) {
+        return nullptr;
+    }
+    const PaletteTint& tint = mTlutTint[tt.siz == G_IM_SIZ_4b ? (tt.palette & 15) : 0];
+    if (tint.base.empty() || !HasHdReplacement(metadata)) {
+        return nullptr;
+    }
+    const auto base = LoadPaletteVariant(metadata, tint.base);
+    // A stand-in's art belongs to one palette, so it can't fill in for another.
+    if (IsPaletteStandIn(metadata) && base == nullptr) {
+        return nullptr;
+    }
+    const uint8_t* src = base != nullptr ? base->ImageData : metadata->resource->ImageData;
+    int add[3];
+    for (int c = 0; c < 3; c++) {
+        add[c] = (tint.add[c] * 255 + (tint.add[c] < 0 ? -15 : 15)) / 31;
+    }
+    const size_t size = metadata->resource->ImageDataSize;
+    size_t begin, end;
+    LoadedImageSpan(tile, size, begin, end);
+    mPaletteTintBuffer.resize(size);
+    for (size_t i = begin; i + 3 < end; i += 4) {
+        for (int c = 0; c < 3; c++) {
+            mPaletteTintBuffer[i + c] = (uint8_t)std::clamp(src[i + c] * tint.mul[c] / 128 + add[c], 0, 255);
+        }
+        mPaletteTintBuffer[i + 3] = src[i + 3];
+    }
+    return mPaletteTintBuffer.data();
+}
+
+// Records the shift for the frame, as for a lerp.
+void Interpreter::SetPaletteTint(const uint8_t* palette, const char* base, const uint8_t mul[3],
+                                 const int8_t add[3]) {
+    PaletteTint& tint = mPaletteTints[palette];
+    tint.base = base;
+    for (int c = 0; c < 3; c++) {
+        tint.mul[c] = mul[c];
+        tint.add[c] = add[c];
+    }
+    tint.frame = mCustomFrameCount;
 }
 
 // The mask a CI tile with an HD replacement reads through, or nullptr.
@@ -1351,12 +1479,16 @@ bool Interpreter::TilePaletteIsNamed(int tile) const {
     const RawTexMetadata* metadata = &mRdp->loaded_texture[tt.tmem_index].raw_tex_metadata;
     if (IsPaletteStandIn(metadata)) {
         const PaletteBlend& blend = mTlutBlend[bank];
+        if (!mTlutTint[bank].base.empty()) {
+            return HasPaletteVariant(metadata, mTlutTint[bank].base);
+        }
         return blend.to.empty() ? HasPaletteVariant(metadata, mTlutPath[bank])
                                 : HasPaletteVariant(metadata, blend.from) && HasPaletteVariant(metadata, blend.to);
     }
-    // A lerp between two named palettes counts as named for HD art (mixed from each
-    // end's variant) and not for N64 texels (drawn through the lerp itself).
-    return !mTlutPath[bank].empty() || (!mTlutBlend[bank].to.empty() && HasHdReplacement(metadata));
+    // A lerp between two named palettes, or a shift of one, counts as named for HD art
+    // (mixed or shifted from the variants) and not for N64 texels (drawn through it).
+    return !mTlutPath[bank].empty() ||
+           ((!mTlutBlend[bank].to.empty() || !mTlutTint[bank].base.empty()) && HasHdReplacement(metadata));
 }
 
 std::string_view Interpreter::GetBaseTexturePath(std::string_view path) {
@@ -2253,11 +2385,13 @@ void Interpreter::ImportTextureRaw(int tile, bool importReplacement) {
             resource = variant;
         } else if (const uint8_t* mixed = BlendPaletteVariants(metadata, tile)) {
             image = mixed;
+        } else if (const uint8_t* shifted = TintPaletteVariant(metadata, tile)) {
+            image = shifted;
         } else if (!TilePaletteIsNamed(tile) && UploadVanillaCi(tile)) {
             return;
         }
     }
-    // Either has the raster's layout, so a band loaded partway down it reads from the same offset.
+    // Each has the raster's layout, so a band loaded partway down it reads from the same offset.
     if (image != nullptr) {
         const uint8_t* start = metadata->resource->ImageData;
         addr = image + (addr >= start && addr < start + metadata->resource->ImageDataSize ? addr - start : 0);
@@ -2988,6 +3122,14 @@ void Interpreter::ImportTexture(int i, int tile, bool importReplacement) {
         key = { origAddr, {}, fmt, siz, paletteIndex, origSizeBytes };
     }
     key.mip_levels = mCurrentMipExtraLevels;
+    if (!importReplacement && !mImportIndexed) {
+        key.palette_variant = TilePaletteVariantId(tile);
+        if (key.palette_variant != 0) {
+            key.palette_addrs[0] = nullptr;
+            key.palette_addrs[1] = nullptr;
+            key.palette_index = 0;
+        }
+    }
     if (mImportIndexed) {
         // Index textures don't depend on palette contents: the palette lookup
         // happens in the shader, so TLUT swaps reuse the same cache entry.
@@ -4405,16 +4547,19 @@ void Interpreter::GfxDpLoadTlut(uint8_t tile, uint32_t high_index) {
         const uint32_t firstBank = paletteByteOffset / 32;
         const auto& tlutRes = mRdp->texture_to_load.raw_tex_metadata.resource;
         const std::string tlutPath = tlutRes != nullptr ? tlutRes->GetInitData()->Path : std::string();
-        // What the game said a raw palette is this frame (gDPPaletteBlend, gDPPaletteMask)
+        // What the game said a raw palette is this frame (gDPPaletteBlend, gDPPaletteMask, gDPPaletteTint)
         const auto blend = tlutRes == nullptr ? mPaletteBlends.find(src) : mPaletteBlends.end();
         const auto mask = tlutRes == nullptr ? mPaletteMasks.find(src) : mPaletteMasks.end();
+        const auto tint = tlutRes == nullptr ? mPaletteTints.find(src) : mPaletteTints.end();
         const bool lerped = blend != mPaletteBlends.end() && blend->second.frame == mCustomFrameCount;
         const bool masked = mask != mPaletteMasks.end() && mask->second.frame == mCustomFrameCount;
+        const bool shifted = tint != mPaletteTints.end() && tint->second.frame == mCustomFrameCount;
         for (uint32_t b = firstBank; b < 16 && (b - firstBank) * 32 < byteCount; b++) {
             mRdp->palette_bank_dram_addr[b] = src + (b - firstBank) * 32;
             mTlutPath[b] = tlutPath;
             mTlutBlend[b] = lerped ? blend->second : PaletteBlend{};
             mTlutMask[b] = masked ? mask->second : PaletteMask{};
+            mTlutTint[b] = shifted ? tint->second : PaletteTint{};
         }
 
         if (high_index == 255 && paletteByteOffset == 0) {
@@ -6576,6 +6721,22 @@ bool gfx_palette_mask_handler_custom(F3DGfx** cmd0) {
     return false;
 }
 
+// G_PAL_TINT: see gDPPaletteTint.
+bool gfx_palette_tint_handler_custom(F3DGfx** cmd0) {
+    Interpreter* gfx = mInstance.lock().get();
+    F3DGfx* cmd = *cmd0;
+    const uint8_t* palette = (const uint8_t*)(uintptr_t)cmd->words.w1;
+    const int8_t add[3] = { (int8_t)C0(16, 8), (int8_t)C0(8, 8), (int8_t)C0(0, 8) };
+    cmd = ++(*cmd0);
+    const char* base = (const char*)cmd->words.w0;
+    const uint8_t mul[3] = { (uint8_t)C1(16, 8), (uint8_t)C1(8, 8), (uint8_t)C1(0, 8) };
+    // A base of raw palette bytes has no HD art to shift.
+    if (palette != nullptr && gfx_check_image_signature(base) == 1) {
+        gfx->SetPaletteTint(palette, base, mul, add);
+    }
+    return false;
+}
+
 bool gfx_set_strict_decal_handler_custom(F3DGfx** cmd0) {
     Interpreter* gfx = mInstance.lock().get();
     F3DGfx* cmd = *cmd0;
@@ -7263,6 +7424,7 @@ static constexpr UcodeHandler otrHandlers = {
     { OTR_G_SET_STRICT_DECAL, { "G_SET_STRICT_DECAL", gfx_set_strict_decal_handler_custom } },
     { OTR_G_PAL_BLEND, { "G_PAL_BLEND", gfx_palette_blend_handler_custom } },
     { OTR_G_PAL_MASK, { "G_PAL_MASK", gfx_palette_mask_handler_custom } },
+    { OTR_G_PAL_TINT, { "G_PAL_TINT", gfx_palette_tint_handler_custom } },
 };
 
 static constexpr UcodeHandler f3dex2Handlers = {
@@ -7763,6 +7925,7 @@ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_r
     const auto stale = [this](const auto& entry) { return entry.second.frame + 1 < mCustomFrameCount; };
     std::erase_if(mPaletteBlends, stale);
     std::erase_if(mPaletteMasks, stale);
+    std::erase_if(mPaletteTints, stale);
 
     mCurMtxReplacements = &mtx_replacements;
     mCurDlReplacements = &dl_replacements;

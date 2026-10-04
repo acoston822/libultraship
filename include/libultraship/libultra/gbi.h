@@ -204,6 +204,7 @@
 #define G_SETTILESCROLL_INTERP 0x4d
 #define G_PAL_BLEND 0x4e
 #define G_PAL_MASK 0x4f
+#define G_PAL_TINT 0x50
 
 /*
  * The following commands are the "generated" RDP commands; the user
@@ -2860,6 +2861,18 @@ typedef union Gfx {
         Gfx* _g = (Gfx*)(pkt);                                                                              \
         _g->words.w0 = _SHIFTL(G_PAL_MASK, 24, 8) | _SHIFTL((opaque), 8, 8) | _SHIFTL((transparent), 0, 8); \
         _g->words.w1 = (uintptr_t)(palAddr);                                                                \
+    }
+
+// Palette resource `base` scaled by `mr/mg/mb` (128 = 1.0) plus signed 5-bit steps `r/g/b`. Two Gfx.
+#define gDPPaletteTint(pkt, palAddr, base, mr, mg, mb, r, g, b)                                    \
+    {                                                                                              \
+        Gfx *_g0 = (Gfx*)(pkt), *_g1 = (Gfx*)(pkt);                                                \
+        _g0->words.w0 = _SHIFTL(G_PAL_TINT, 24, 8) | _SHIFTL((uint8_t)(r), 16, 8) |                \
+                        _SHIFTL((uint8_t)(g), 8, 8) | _SHIFTL((uint8_t)(b), 0, 8);                 \
+        _g0->words.w1 = (uintptr_t)(palAddr);                                                      \
+        _g1->words.w0 = (uintptr_t)(base);                                                         \
+        _g1->words.w1 = _SHIFTL((uint8_t)(mr), 16, 8) | _SHIFTL((uint8_t)(mg), 8, 8) |             \
+                        _SHIFTL((uint8_t)(mb), 0, 8);                                              \
     }
 
 // Toggles strict (depth-equal) decal compare for subsequent ZMODE_DEC draws,

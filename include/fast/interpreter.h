@@ -225,6 +225,8 @@ struct TextureCacheKey {
     // the entries its opaque and transparent pixels read.
     uint8_t indexed;
     uint8_t mask[2];
+    // The HD palette mix or shift a CI tile was drawn through; 0 for none.
+    uint32_t palette_variant;
 
     bool operator==(const TextureCacheKey&) const noexcept = default;
 
@@ -901,7 +903,7 @@ class Interpreter {
     bool IsPaletteStandIn(const RawTexMetadata* metadata) const;
     bool HasPaletteVariant(const RawTexMetadata* metadata, const std::string& tlut) const;
     bool TilePaletteIsNamed(int tile) const;
-    // What the game says a palette it built at run time is (gDPPaletteBlend, gDPPaletteMask),
+    // What the game says a palette it built at run time is (gDPPaletteBlend, gDPPaletteMask, gDPPaletteTint),
     // by the address it lives at, for the frame it said so. A bank keeps a copy alongside
     // mTlutPath while that palette is loaded in it.
     struct PaletteBlend {
@@ -914,16 +916,31 @@ class Interpreter {
         int16_t transparent = -1;
         uint32_t frame = 0;
     };
+    struct PaletteTint {
+        std::string base;
+        uint8_t mul[3] = { 128, 128, 128 }; // 1/128ths
+        int8_t add[3] = { 0, 0, 0 };        // 5-bit steps
+        uint32_t frame = 0;
+    };
     // Vanilla texture behind each replacement, for tiles drawn through a run-time palette
     mutable std::unordered_map<Fast::Texture*, std::shared_ptr<Fast::Texture>> mVanillaTextures;
     std::unordered_map<const uint8_t*, PaletteBlend> mPaletteBlends;
     std::unordered_map<const uint8_t*, PaletteMask> mPaletteMasks;
+    std::unordered_map<const uint8_t*, PaletteTint> mPaletteTints;
     PaletteBlend mTlutBlend[16];
     PaletteMask mTlutMask[16];
+    PaletteTint mTlutTint[16];
     std::vector<uint8_t> mPaletteBlendBuffer;
+    std::vector<uint8_t> mPaletteTintBuffer;
     void SetPaletteBlend(const uint8_t* palette, const char* from, const char* to, uint8_t alpha);
     void SetPaletteMask(const uint8_t* palette, uint8_t opaque, uint8_t transparent);
+    void SetPaletteTint(const uint8_t* palette, const char* base, const uint8_t mul[3], const int8_t add[3]);
     const uint8_t* BlendPaletteVariants(const RawTexMetadata* metadata, int tile);
+    const uint8_t* TintPaletteVariant(const RawTexMetadata* metadata, int tile);
+    uint32_t TilePaletteVariantId(int tile);
+    bool TileBlendEnds(const RawTexMetadata* metadata, int tile, std::string& from, std::string& to, int& steps);
+    std::string PaletteArtName(const RawTexMetadata* metadata, const std::string& tlut);
+    void LoadedImageSpan(int tile, size_t imageSize, size_t& begin, size_t& end) const;
     const PaletteMask* TilePaletteMask(int tile) const;
     uint32_t mMipBaseWidth = 0, mMipBaseHeight = 0; // level-0 upload size of the current chain
     std::vector<uint8_t> mMipLevelBuffer;
