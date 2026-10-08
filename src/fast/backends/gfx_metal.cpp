@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <queue>
 #include <time.h>
+#include <chrono>
 #include <math.h>
 #include <cmath>
 #include <stddef.h>
@@ -39,6 +40,25 @@
 #include "ship/config/ConsoleVariable.h"
 
 #include "fast/Fast3dWindow.h"
+
+namespace {
+// Temporary diagnostics: logs how long slow GPU work takes so frame-pacing stalls can be traced.
+struct SlowScope {
+    const char* what;
+    uint64_t a, b;
+    uint32_t w, h;
+    double thresholdMs;
+    std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    SlowScope(const char* what_, uint64_t a_, uint64_t b_, uint32_t w_, uint32_t h_, double thresholdMs_)
+        : what(what_), a(a_), b(b_), w(w_), h(h_), thresholdMs(thresholdMs_) {}
+    ~SlowScope() {
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        if (ms >= thresholdMs) {
+            SPDLOG_INFO("[frame-stats] slow {} took {:.1f}ms id0={:#x} id1={:#x} size={}x{}", what, ms, a, b, w, h);
+        }
+    }
+};
+} // namespace
 
 #define ARRAY_COUNT(arr) (int32_t)(sizeof(arr) / sizeof(arr[0]))
 
@@ -216,6 +236,7 @@ void GfxRenderingAPIMetal::ClearShaderCache() {
 }
 
 struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shader_id0, uint64_t shader_id1) {
+    SlowScope slowTimer("shader compile", shader_id0, shader_id1, 0, 0, 0.0);
     CCFeatures cc_features;
     gfx_cc_get_features(shader_id0, shader_id1, &cc_features);
 
@@ -381,6 +402,7 @@ void GfxRenderingAPIMetal::UploadTexture(const uint8_t* rgba32_buf, uint32_t wid
     if (width == 0 || height == 0) {
         return;
     }
+    SlowScope slowTimer("texture upload", 0, 0, width, height, 5.0);
 
     TextureDataMetal* texture_data = &mTextures[mCurrentTextureIds[mCurrentTile]];
 
