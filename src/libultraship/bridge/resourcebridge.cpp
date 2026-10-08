@@ -2,16 +2,40 @@
 #include "ship/Context.h"
 #include <string>
 #include <algorithm>
+#include <chrono>
 
 #include "fast/resource/type/Texture.h"
 #include "ship/utils/StrHash64.h"
 #include "ship/window/Window.h"
 
+
+namespace {
+// Temporary diagnostics: logs resource loads that take long enough to stall a frame.
+struct SlowLoad {
+    const char* name;
+    uint64_t crc;
+    std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    SlowLoad(const char* n, uint64_t c) : name(n), crc(c) {}
+    ~SlowLoad() {
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        if (ms >= 10.0) {
+            if (name != nullptr) {
+                SPDLOG_INFO("[frame-stats] slow resource load took {:.1f}ms name={}", ms, name);
+            } else {
+                SPDLOG_INFO("[frame-stats] slow resource load took {:.1f}ms crc={:#x}", ms, crc);
+            }
+        }
+    }
+};
+} // namespace
+
 std::shared_ptr<Ship::IResource> ResourceLoad(const char* name) {
+    SlowLoad slowTimer(name, 0);
     return Ship::Context::GetRawInstance()->GetResourceManager()->LoadResource(name);
 }
 
 std::shared_ptr<Ship::IResource> ResourceLoad(uint64_t crc) {
+    SlowLoad slowTimer(nullptr, crc);
     return Ship::Context::GetRawInstance()->GetResourceManager()->LoadResource(crc);
 }
 
@@ -42,10 +66,12 @@ uint8_t ResourceGetIsCustomByCrc(uint64_t crc) {
 }
 
 void* ResourceGetDataByName(const char* name) {
+    SlowLoad slowTimer(name, 0);
     return Ship::Context::GetRawInstance()->GetResourceManager()->GetResourceRawPointer(name);
 }
 
 void* ResourceGetDataByCrc(uint64_t crc) {
+    SlowLoad slowTimer(nullptr, crc);
     return Ship::Context::GetRawInstance()->GetResourceManager()->GetResourceRawPointer(crc);
 }
 
