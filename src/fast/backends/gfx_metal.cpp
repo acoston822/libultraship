@@ -754,6 +754,7 @@ void GfxRenderingAPIMetal::OnResize() {
 }
 
 void GfxRenderingAPIMetal::StartFrame() {
+    SlowScope slowStart("StartFrame", 0, 0, 0, 0, 10.0);
     mFrameUniforms.frameCount++;
     if (mFrameUniforms.frameCount > 150) {
         // No high values, as noise starts to look ugly
@@ -789,6 +790,7 @@ void GfxRenderingAPIMetal::StartFrame() {
 }
 
 void GfxRenderingAPIMetal::EndFrame() {
+    SlowScope slowEnd("EndFrame", 0, 0, 0, 0, 10.0);
     std::set<int>::iterator it = mDrawnFramebuffers.begin();
     it++;
 
@@ -913,7 +915,10 @@ void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t heigh
     }
 #endif
     mCurrentDrawable = nullptr;
-    mCurrentDrawable = mLayer->nextDrawable();
+    {
+        SlowScope slow("nextDrawable", 0, 0, width, height, 8.0);
+        mCurrentDrawable = mLayer->nextDrawable();
+    }
 
     bool msaa_enabled = Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gMSAAValue", 1) > 1;
 
@@ -1320,7 +1325,10 @@ GfxRenderingAPIMetal::GetPixelDepth(int fb_id, const std::set<std::pair<float, f
     compute_encoder->endEncoding();
 
     command_buffer->commit();
-    command_buffer->waitUntilCompleted();
+    {
+        SlowScope slowWait("command buffer wait", 0, 0, 0, 0, 8.0);
+        command_buffer->waitUntilCompleted();
+    }
 
     // Now the depth values can be accessed in the buffer.
     float* depth_values = (float*)mDepthValueOutputBuffer->contents();
@@ -1493,6 +1501,7 @@ void GfxRenderingAPIMetal::ReadFramebufferToCPU(int fb_id, uint32_t width, uint3
         // Return previous frame's data.  Wait on the retained command buffer
         // to guarantee the GPU blit has finished before reading the shared buffer.
         if (mScreenReadbackDataReady && mScreenReadbackBuffer && mScreenReadbackCmdBuf) {
+            SlowScope slowWait("screen readback wait", 0, 0, 0, 0, 8.0);
             mScreenReadbackCmdBuf->waitUntilCompleted();
             mScreenReadbackCmdBuf->release();
             mScreenReadbackCmdBuf = nullptr;
@@ -1544,6 +1553,7 @@ void GfxRenderingAPIMetal::ReadFramebufferToCPU(int fb_id, uint32_t width, uint3
         framebuffer.mCommandBuffer->commit();
 
         if (framebuffer.mUseReadbackQueue) {
+            SlowScope slowWait("readback queue wait", 0, 0, 0, 0, 8.0);
             framebuffer.mCommandBuffer->waitUntilCompleted();
             uint16_t* values = (uint16_t*)output_buffer->contents();
             memcpy(rgba16_buf, values, sizeof(uint16_t) * width * height);
