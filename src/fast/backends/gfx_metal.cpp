@@ -815,9 +815,18 @@ void GfxRenderingAPIMetal::EndFrame() {
     if (mCurrentDrawable != nullptr) {
         // Experimental: on 120 Hz (ProMotion) screens, 60 fps content driven by a timer lands on whichever
         // refresh comes next, so frame gaps bounce between ~8/17/25 ms. Asking for a minimum gap just under
-        // 1/60 s (a little short of two refreshes) spaces frames evenly. gMetalPresentPacing=0 disables it.
+        // one frame at the target rate (a little short of a whole number of refreshes) spaces frames evenly. gMetalPresentPacing=0 disables it.
         if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gMetalPresentPacing", 1) != 0) {
-            screen_framebuffer.mCommandBuffer->presentDrawableAfterMinimumDuration(mCurrentDrawable, 1.0 / 64.0);
+            // Follow the game's target frame rate (30/60/120...) rather than assuming 60.
+            int targetFps = 60;
+            if (auto wnd = std::dynamic_pointer_cast<Fast::Fast3dWindow>(Ship::Context::GetRawInstance()->GetWindow())) {
+                targetFps = wnd->GetTargetFps();
+            }
+            if (targetFps < 1) {
+                targetFps = 60;
+            }
+            screen_framebuffer.mCommandBuffer->presentDrawableAfterMinimumDuration(mCurrentDrawable,
+                                                                                    0.93 / (double) targetFps);
         } else {
             screen_framebuffer.mCommandBuffer->presentDrawable(mCurrentDrawable);
         }
