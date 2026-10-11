@@ -41,6 +41,10 @@
 
 #include "fast/Fast3dWindow.h"
 
+#ifdef __IOS__
+extern "C" void iOS_SetPreferredFrameRate(int fps);
+#endif
+
 namespace {
 // Temporary diagnostics: logs how long slow GPU work takes so frame-pacing stalls can be traced.
 struct SlowScope {
@@ -851,6 +855,18 @@ void GfxRenderingAPIMetal::EndFrame() {
             }
             screen_framebuffer.mCommandBuffer->presentDrawableAfterMinimumDuration(mCurrentDrawable,
                                                                                     0.93 / (double) targetFps);
+#ifdef __IOS__
+            // Ask iOS to hold the display at the target rate (gMetalPreferredFrameRate=0 disables).
+            static int sRequestedFps = -1;
+            const int wantFps =
+                Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gMetalPreferredFrameRate", 1) != 0
+                    ? targetFps
+                    : 0;
+            if (wantFps != sRequestedFps) {
+                sRequestedFps = wantFps;
+                iOS_SetPreferredFrameRate(wantFps);
+            }
+#endif
         } else {
             screen_framebuffer.mCommandBuffer->presentDrawable(mCurrentDrawable);
         }
