@@ -837,7 +837,14 @@ void GfxRenderingAPIMetal::EndFrame() {
     }
 
     if (mCurrentDrawable != nullptr) {
-        screen_framebuffer.mCommandBuffer->presentDrawable(mCurrentDrawable);
+        // Experimental: on 120 Hz (ProMotion) screens, 60 fps content driven by a timer lands on whichever
+        // refresh comes next, so frame gaps bounce between ~8/17/25 ms. Asking for a minimum gap just under
+        // 1/60 s (a little short of two refreshes) spaces frames evenly. gMetalPresentPacing=0 disables it.
+        if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gMetalPresentPacing", 1) != 0) {
+            screen_framebuffer.mCommandBuffer->presentDrawableAfterMinimumDuration(mCurrentDrawable, 1.0 / 64.0);
+        } else {
+            screen_framebuffer.mCommandBuffer->presentDrawable(mCurrentDrawable);
+        }
     }
     mCurrentVertexBufferPoolIndex = (mCurrentVertexBufferPoolIndex + 1) % kMaxVertexBufferPoolSize;
     screen_framebuffer.mCommandBuffer->commit();
