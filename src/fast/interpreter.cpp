@@ -86,6 +86,8 @@ std::stack<std::string> currentDir;
 
 namespace Fast {
 
+std::atomic<bool> gExternalDisplayActive{ false };
+
 static UcodeHandlers ucode_handler_index = ucode_f3dex2;
 
 const static uint32_t f3dex2AttrHandler[] = {
@@ -7768,7 +7770,8 @@ void Interpreter::StartFrame() {
     mPrvDimensions = mCurDimensions;
     mPrevNativeDimensions = mNativeDimensions;
     const bool postPassesActive = HasPostPasses();
-    if (!ViewportMatchesRendererResolution() || mMsaaLevel > 1 || postPassesActive) {
+    if (!ViewportMatchesRendererResolution() || mMsaaLevel > 1 || postPassesActive ||
+        gExternalDisplayActive.load()) {
         mRendersToFb = true;
         if (!ViewportMatchesRendererResolution()) {
             mRapi->UpdateFramebufferParameters(mGameFb, mCurDimensions.width, mCurDimensions.height, mMsaaLevel, true,
@@ -7782,7 +7785,7 @@ void Interpreter::StartFrame() {
             mRapi->UpdateFramebufferParameters(mGameFb, mGfxCurrentWindowDimensions.width,
                                                mGfxCurrentWindowDimensions.height, mMsaaLevel, false, true, true, true);
         }
-        if (mMsaaLevel > 1 && (!ViewportMatchesRendererResolution() || postPassesActive)) {
+        if (mMsaaLevel > 1 && (!ViewportMatchesRendererResolution() || postPassesActive || gExternalDisplayActive.load())) {
             // Single-sample resolve target for the post chain; matches the game fb.
             mRapi->UpdateFramebufferParameters(mGameFbMsaaResolved, mCurDimensions.width, mCurDimensions.height, 1,
                                                false, false, false, false);
@@ -7857,7 +7860,7 @@ void Interpreter::RunGuiOnly() {
         mRapi->StartDrawToFramebuffer(0, 1);
         mRapi->ClearFramebuffer(true, true);
         if (mMsaaLevel > 1) {
-            if (!ViewportMatchesRendererResolution()) {
+            if (!ViewportMatchesRendererResolution() || gExternalDisplayActive.load()) {
                 mRapi->ResolveMSAAColorBuffer(mGameFbMsaaResolved, mGameFb);
                 mGfxFrameBuffer = (uintptr_t)mRapi->GetFramebufferTextureId(mGameFbMsaaResolved);
             } else {
@@ -7980,7 +7983,7 @@ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_r
             // Post-processed image; MSAA was already resolved inside the chain
             mGfxFrameBuffer = (uintptr_t)mRapi->GetFramebufferTextureId(postOutputFb);
         } else if (mMsaaLevel > 1) {
-            if (!ViewportMatchesRendererResolution()) {
+            if (!ViewportMatchesRendererResolution() || gExternalDisplayActive.load()) {
                 mRapi->ResolveMSAAColorBuffer(mGameFbMsaaResolved, mGameFb);
                 mGfxFrameBuffer = (uintptr_t)mRapi->GetFramebufferTextureId(mGameFbMsaaResolved);
             } else {
@@ -7999,6 +8002,7 @@ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_r
 }
 
 void Interpreter::EndFrame() {
+    mRapi->SetExternalSource(gExternalDisplayActive.load() ? reinterpret_cast<void*>(mGfxFrameBuffer) : nullptr);
     mRapi->EndFrame();
     mWapi->SwapBuffersBegin();
     mRapi->FinishRender();

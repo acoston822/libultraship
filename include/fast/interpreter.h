@@ -157,6 +157,9 @@ void gfx_cc_get_features(uint64_t shader_id0, uint64_t shader_id1, struct CCFeat
 union Gfx;
 
 namespace Fast {
+// True while a second screen (AirPlay / external display) is attached and in use. It makes the game render to its
+// own framebuffer so the image can be shown on that screen without the UI.
+extern std::atomic<bool> gExternalDisplayActive;
 
 class GfxRenderingAPI;
 class GfxWindowBackend;

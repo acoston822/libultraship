@@ -17,6 +17,7 @@
 #include <math.h>
 #include <cmath>
 #include <stddef.h>
+#include <atomic>
 
 #ifndef _LANGUAGE_C
 #define _LANGUAGE_C
@@ -41,6 +42,18 @@
 #include "fast/Fast3dWindow.h"
 
 #define ARRAY_COUNT(arr) (int32_t)(sizeof(arr) / sizeof(arr[0]))
+
+// MARK: - Second screen (AirPlay / external display) request
+// The app hands over the CAMetalLayer of a window on the external screen (or nullptr to stop). The render thread
+// picks the change up at the end of the next frame.
+static std::atomic<CA::MetalLayer*> sExternalLayerRequest{ nullptr };
+static std::atomic<bool> sExternalLayerChanged{ false };
+
+extern "C" void LUS_SetExternalDisplayLayer(void* layer) {
+    sExternalLayerRequest.store(static_cast<CA::MetalLayer*>(layer));
+    sExternalLayerChanged.store(true);
+    Fast::gExternalDisplayActive.store(layer != nullptr);
+}
 
 // MARK: - Helpers
 namespace Fast {
@@ -834,6 +847,8 @@ void GfxRenderingAPIMetal::EndFrame() {
     mCurrentVertexBufferPoolIndex = (mCurrentVertexBufferPoolIndex + 1) % kMaxVertexBufferPoolSize;
     screen_framebuffer.mCommandBuffer->commit();
 
+    PresentExternal();
+
     // Now that commit has been called, retain the command buffer for GPU sync
     // in ReadFramebufferToCPU next frame (waitUntilCompleted before reading).
     if (mScreenReadbackBuffer && !mScreenReadbackDataReady) {
@@ -877,6 +892,127 @@ void GfxRenderingAPIMetal::EndFrame() {
 }
 
 void GfxRenderingAPIMetal::FinishRender() {
+}
+
+// MARK: - Second screen
+
+void GfxRenderingAPIMetal::SetExternalSource(void* texture) {
+    mExternalSource = static_cast<MTL::Texture*>(texture);
+}
+
+bool GfxRenderingAPIMetal::CreateExternalPipeline() {
+    static const char* kSource = R"MSL(
+#include <metal_stdlib>
+using namespace metal;
+struct ExtOut {
+    float4 position [[position]];
+    float2 uv;
+};
+vertex ExtOut ext_vs(uint vid [[vertex_id]]) {
+    float2 p = float2((vid << 1) & 2, vid & 2);
+    ExtOut o;
+    o.position = float4(p * 2.0 - 1.0, 0.0, 1.0);
+    o.uv = float2(p.x, 1.0 - p.y);
+    return o;
+}
+fragment float4 ext_fs(ExtOut in [[stage_in]], texture2d<float> tex [[texture(0)]], sampler smp [[sampler(0)]]) {
+    return float4(tex.sample(smp, in.uv).rgb, 1.0);
+}
+)MSL";
+
+    NS::Error* error = nullptr;
+    MTL::Library* library =
+        mDevice->newLibrary(NS::String::string(kSource, NS::UTF8StringEncoding), nullptr, &error);
+    if (library == nullptr) {
+        SPDLOG_ERROR("[external-display] shader compile failed");
+        return false;
+    }
+    MTL::Function* vs = library->newFunction(NS::String::string("ext_vs", NS::UTF8StringEncoding));
+    MTL::Function* fs = library->newFunction(NS::String::string("ext_fs", NS::UTF8StringEncoding));
+
+    MTL::RenderPipelineDescriptor* desc = MTL::RenderPipelineDescriptor::alloc()->init();
+    desc->setVertexFunction(vs);
+    desc->setFragmentFunction(fs);
+    desc->colorAttachments()->object(0)->setPixelFormat(MTL::PixelFormatBGRA8Unorm);
+    mExternalPipeline = mDevice->newRenderPipelineState(desc, &error);
+
+    MTL::SamplerDescriptor* samplerDesc = MTL::SamplerDescriptor::alloc()->init();
+    samplerDesc->setMinFilter(MTL::SamplerMinMagFilterLinear);
+    samplerDesc->setMagFilter(MTL::SamplerMinMagFilterLinear);
+    samplerDesc->setSAddressMode(MTL::SamplerAddressModeClampToEdge);
+    samplerDesc->setTAddressMode(MTL::SamplerAddressModeClampToEdge);
+    mExternalSampler = mDevice->newSamplerState(samplerDesc);
+
+    samplerDesc->release();
+    desc->release();
+    vs->release();
+    fs->release();
+    library->release();
+
+    if (mExternalPipeline == nullptr) {
+        SPDLOG_ERROR("[external-display] pipeline creation failed");
+        return false;
+    }
+    return true;
+}
+
+// Draws the finished game image (no UI) onto the external screen, fitted and centered.
+void GfxRenderingAPIMetal::PresentExternal() {
+    if (sExternalLayerChanged.exchange(false)) {
+        mExternalLayer = sExternalLayerRequest.load();
+        if (mExternalLayer != nullptr) {
+            mExternalLayer->setDevice(mDevice);
+            mExternalLayer->setPixelFormat(MTL::PixelFormatBGRA8Unorm);
+            mExternalLayer->setFramebufferOnly(true);
+            SPDLOG_INFO("[external-display] second screen attached");
+        } else {
+            SPDLOG_INFO("[external-display] second screen detached");
+        }
+    }
+    if (mExternalLayer == nullptr || mExternalSource == nullptr) {
+        return;
+    }
+    if (mExternalPipeline == nullptr && !CreateExternalPipeline()) {
+        sExternalLayerRequest.store(nullptr);
+        mExternalLayer = nullptr;
+        gExternalDisplayActive.store(false);
+        return;
+    }
+
+    CA::MetalDrawable* drawable = mExternalLayer->nextDrawable();
+    if (drawable == nullptr) {
+        return;
+    }
+    MTL::Texture* target = drawable->texture();
+
+    MTL::RenderPassDescriptor* pass = MTL::RenderPassDescriptor::renderPassDescriptor();
+    MTL::RenderPassColorAttachmentDescriptor* color = pass->colorAttachments()->object(0);
+    color->setTexture(target);
+    color->setLoadAction(MTL::LoadActionClear);
+    color->setClearColor(MTL::ClearColor::Make(0.0, 0.0, 0.0, 1.0));
+    color->setStoreAction(MTL::StoreActionStore);
+
+    MTL::CommandBuffer* commandBuffer = mCommandQueue->commandBuffer();
+    MTL::RenderCommandEncoder* encoder = commandBuffer->renderCommandEncoder(pass);
+
+    const double dw = (double) target->width();
+    const double dh = (double) target->height();
+    const double sw = (double) mExternalSource->width();
+    const double sh = (double) mExternalSource->height();
+    if (sw > 0.0 && sh > 0.0) {
+        const double scale = std::min(dw / sw, dh / sh);
+        const double vw = sw * scale;
+        const double vh = sh * scale;
+        MTL::Viewport viewport = { (dw - vw) * 0.5, (dh - vh) * 0.5, vw, vh, 0.0, 1.0 };
+        encoder->setViewport(viewport);
+        encoder->setRenderPipelineState(mExternalPipeline);
+        encoder->setFragmentTexture(mExternalSource, 0);
+        encoder->setFragmentSamplerState(mExternalSampler, 0);
+        encoder->drawPrimitives(MTL::PrimitiveTypeTriangle, NS::UInteger(0), NS::UInteger(3));
+    }
+    encoder->endEncoding();
+    commandBuffer->presentDrawable(drawable);
+    commandBuffer->commit();
 }
 
 int GfxRenderingAPIMetal::CreateFramebuffer() {

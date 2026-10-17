@@ -138,6 +138,9 @@ class GfxRenderingAPI {
     virtual void StartFrame() = 0;
     virtual void EndFrame() = 0;
     virtual void FinishRender() = 0;
+    // Second screen (AirPlay): the finished game image, without the UI, or nullptr. Only the Metal backend uses it.
+    virtual void SetExternalSource(void* texture) {
+    }
     virtual int CreateFramebuffer() = 0;
     virtual void UpdateFramebufferParameters(int fb_id, uint32_t width, uint32_t height, uint32_t msaa_level,
                                              bool opengl_invertY, bool render_target, bool has_depth_buffer,

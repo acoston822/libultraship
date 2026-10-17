@@ -177,6 +177,9 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
     void StartFrame() override;
     void EndFrame() override;
     void FinishRender() override;
+    void SetExternalSource(void* texture) override;
+    void PresentExternal();
+    bool CreateExternalPipeline();
     int CreateFramebuffer() override;
     void UpdateFramebufferParameters(int fb_id, uint32_t width, uint32_t height, uint32_t msaa_level,
                                      bool opengl_invertY, bool render_target, bool has_depth_buffer,
@@ -208,6 +211,11 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
     SDL_Renderer* mRenderer = nullptr;
     CA::MetalLayer* mLayer = nullptr; // CA::MetalLayer*
     MTL::Device* mDevice = nullptr;
+    // Second screen
+    CA::MetalLayer* mExternalLayer = nullptr;
+    MTL::RenderPipelineState* mExternalPipeline = nullptr;
+    MTL::SamplerState* mExternalSampler = nullptr;
+    MTL::Texture* mExternalSource = nullptr;
     MTL::CommandQueue* mCommandQueue = nullptr;
     MTL::CommandQueue* mReadbackQueue = nullptr;
 
