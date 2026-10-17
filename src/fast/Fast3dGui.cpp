@@ -546,7 +546,8 @@ void Fast3dGui::DrawGame() {
         }
     }
     uintptr_t fb = Ship::Context::GetRawInstance()->GetWindow()->GetGfxFrameBuffer();
-    if (fb) {
+    // With a second screen attached the game is shown there, so this screen is left to the controls and menus.
+    if (fb && !gExternalDisplayActive.load()) {
         ImGui::SetCursorPos(pos);
         ImGui::Image(reinterpret_cast<ImTextureID>(fb), size);
     }
