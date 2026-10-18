@@ -960,6 +960,7 @@ fragment float4 ext_fs(ExtOut in [[stage_in]], texture2d<float> tex [[texture(0)
 void GfxRenderingAPIMetal::PresentExternal() {
     if (sExternalLayerChanged.exchange(false)) {
         mExternalLayer = sExternalLayerRequest.load();
+        mExternalLastSizes = {};
         if (mExternalLayer != nullptr) {
             mExternalLayer->setDevice(mDevice);
             mExternalLayer->setPixelFormat(MTL::PixelFormatBGRA8Unorm);
@@ -1004,6 +1005,13 @@ void GfxRenderingAPIMetal::PresentExternal() {
         const double vw = sw * scale;
         const double vh = sh * scale;
         MTL::Viewport viewport = { (dw - vw) * 0.5, (dh - vh) * 0.5, vw, vh, 0.0, 1.0 };
+        const std::array<uint64_t, 4> sizes = { mExternalSource->width(), mExternalSource->height(),
+                                              target->width(), target->height() };
+        if (sizes != mExternalLastSizes) {
+            mExternalLastSizes = sizes;
+            SPDLOG_INFO("[external-display] source={}x{} target={}x{} viewport=({},{}) {}x{}",
+                        sizes[0], sizes[1], sizes[2], sizes[3], viewport.originX, viewport.originY, vw, vh);
+        }
         encoder->setViewport(viewport);
         encoder->setRenderPipelineState(mExternalPipeline);
         encoder->setFragmentTexture(mExternalSource, 0);
