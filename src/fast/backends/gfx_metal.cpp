@@ -18,7 +18,6 @@
 #include <cmath>
 #include <stddef.h>
 #include <atomic>
-#include <chrono>
 
 #ifndef _LANGUAGE_C
 #define _LANGUAGE_C
@@ -1044,19 +1043,7 @@ void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t heigh
     }
 #endif
     mCurrentDrawable = nullptr;
-    const auto drawableWaitStart = std::chrono::steady_clock::now();
     mCurrentDrawable = mLayer->nextDrawable();
-    {
-        // Diagnostic: a long wait here means the display isn't handing back drawables.
-        const auto waitMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
-                                                                                  drawableWaitStart)
-                                .count();
-        static int sDrawableWarnings = 0;
-        if ((waitMs > 100 || mCurrentDrawable == nullptr) && sDrawableWarnings++ < 60) {
-            SPDLOG_WARN("[metal] nextDrawable waited {} ms{}", (long long) waitMs,
-                        mCurrentDrawable == nullptr ? " and returned no drawable" : "");
-        }
-    }
 
     bool msaa_enabled = Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gMSAAValue", 1) > 1;
 
