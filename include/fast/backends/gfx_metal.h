@@ -12,7 +12,6 @@
 
 #include <imgui_impl_sdl2.h>
 #include <simd/simd.h>
-#include <array>
 
 static constexpr size_t kMaxVertexBufferPoolSize = 3;
 static constexpr size_t kVertexBufferBaseSize = 256 * 32 * 3 * sizeof(float) * 50;
@@ -217,7 +216,6 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
     MTL::RenderPipelineState* mExternalPipeline = nullptr;
     MTL::SamplerState* mExternalSampler = nullptr;
     MTL::Texture* mExternalSource = nullptr;
-    std::array<uint64_t, 4> mExternalLastSizes = {};
     MTL::CommandQueue* mCommandQueue = nullptr;
     MTL::CommandQueue* mReadbackQueue = nullptr;
 

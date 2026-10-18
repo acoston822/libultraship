@@ -8004,33 +8004,6 @@ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_r
 }
 
 void Interpreter::EndFrame() {
-#ifdef __APPLE__
-    // Report geometry changes, not every frame. This distinguishes a shifted game
-    // render from an incorrectly sized external layer in device logs.
-    static std::array<int64_t, 13> lastExternalGeometry = {};
-    static bool loggedExternalGeometry = false;
-    static unsigned externalGeometryLogs = 0;
-    if (gExternalDisplayActive.load()) {
-        const std::array<int64_t, 13> geometry = {
-            mGfxCurrentWindowDimensions.width, mGfxCurrentWindowDimensions.height,
-            mCurDimensions.width, mCurDimensions.height,
-            mGameWindowViewport.x, mGameWindowViewport.y, mGameWindowViewport.width, mGameWindowViewport.height,
-            mRdp->viewport.x, mRdp->viewport.y, mRdp->viewport.width, mRdp->viewport.height, mMsaaLevel
-        };
-        if (externalGeometryLogs < 32 && (!loggedExternalGeometry || geometry != lastExternalGeometry)) {
-            ++externalGeometryLogs;
-            lastExternalGeometry = geometry;
-            loggedExternalGeometry = true;
-            SPDLOG_INFO("[external-display] window={}x{} render={}x{} game-area=({},{}) {}x{} "
-                        "draw-viewport=({},{}) {}x{} msaa={} offscreen={}",
-                        geometry[0], geometry[1], geometry[2], geometry[3], geometry[4], geometry[5], geometry[6],
-                        geometry[7], geometry[8], geometry[9], geometry[10], geometry[11], geometry[12], mRendersToFb);
-        }
-    } else {
-        loggedExternalGeometry = false;
-        externalGeometryLogs = 0;
-    }
-#endif
     mRapi->SetExternalSource(gExternalDisplayActive.load() ? reinterpret_cast<void*>(mGfxFrameBuffer) : nullptr);
     mRapi->EndFrame();
     mWapi->SwapBuffersBegin();
