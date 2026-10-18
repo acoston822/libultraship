@@ -4321,8 +4321,10 @@ void Interpreter::AdjustVIewportOrScissor(XYWidthHeight* area) {
         area->x *= RATIO_X(mActiveFrameBuffer, mCurDimensions);
         area->y *= RATIO_Y(mActiveFrameBuffer, mCurDimensions);
 
-        if (!mRendersToFb || (mMsaaLevel > 1 && mCurDimensions.width == mGameWindowViewport.width &&
-                              mCurDimensions.height == mGameWindowViewport.height)) {
+        // On Apple the game framebuffer is always sized to the render resolution (see
+        // ViewportMatchesRendererResolution), so the window offset must not be added just because the sizes happen
+        // to be equal; that shifted the picture inside the framebuffer.
+        if (!mRendersToFb || (mMsaaLevel > 1 && ViewportMatchesRendererResolution())) {
             area->x += mGameWindowViewport.x;
             area->y += mGfxCurrentWindowDimensions.height - (mGameWindowViewport.y + mGameWindowViewport.height);
         }
@@ -8062,8 +8064,7 @@ void Interpreter::CopyFrameBuffer(int fb_dst_id, int fb_src_id, bool copyOnce, b
 
     // When rendering to the main window buffer or MSAA is enabled with a buffer size equal to the view port,
     // then the source coordinates must account for any docked ImGui elements
-    if (fb_src_id == 0 || (mMsaaLevel > 1 && mCurDimensions.width == mGameWindowViewport.width &&
-                           mCurDimensions.height == mGameWindowViewport.height)) {
+    if (fb_src_id == 0 || (mMsaaLevel > 1 && ViewportMatchesRendererResolution())) {
         srcX0 = mGameWindowViewport.x;
         srcY0 = mGameWindowViewport.y;
         srcX1 = mGameWindowViewport.x + mGameWindowViewport.width;
@@ -8096,8 +8097,7 @@ void Interpreter::AdjustPixelDepthCoordinates(float& x, float& y) {
     x = x * RATIO_X(mActiveFrameBuffer, mCurDimensions) -
         (mNativeDimensions.width * RATIO_X(mActiveFrameBuffer, mCurDimensions) - mCurDimensions.width) / 2;
     y *= RATIO_Y(mActiveFrameBuffer, mCurDimensions);
-    if (!mRendersToFb || (mMsaaLevel > 1 && mCurDimensions.width == mGameWindowViewport.width &&
-                          mCurDimensions.height == mGameWindowViewport.height)) {
+    if (!mRendersToFb || (mMsaaLevel > 1 && ViewportMatchesRendererResolution())) {
         x += mGameWindowViewport.x;
         y += mGfxCurrentWindowDimensions.height - (mGameWindowViewport.y + mGameWindowViewport.height);
     }
