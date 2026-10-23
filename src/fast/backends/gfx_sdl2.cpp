@@ -15,6 +15,7 @@
 #include "ship/controller/controldeck/ControlDeck.h"
 #include "ship/window/FileDropMgr.h"
 #include "fast/backends/gfx_sdl.h"
+#include "fast/backends/ios_frame_wait.h"
 
 #ifdef __OpenBSD__
 #include <sys/sysctl.h>
@@ -64,6 +65,14 @@ LONG_PTR SDL_WndProc;
 #endif
 
 namespace Fast {
+#if defined(__IOS__)
+static bool (*sIosFrameWaitCallback)(double) = nullptr;
+
+void SetIosFrameWaitCallback(bool (*callback)(double)) {
+    sIosFrameWaitCallback = callback;
+}
+#endif
+
 const SDL_Scancode lus_to_sdl_table[] = {
     SDL_SCANCODE_UNKNOWN,
     SDL_SCANCODE_ESCAPE,
@@ -842,8 +851,16 @@ void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
 #endif
     if (left > 0) {
 #ifndef _WIN32
-        const timespec spec = { 0, left * 100 };
-        nanosleep(&spec, nullptr);
+#if defined(__IOS__)
+        // Native UIKit animations share SDL's main thread. Let the application
+        // service them during this existing wait without raising the game FPS.
+        if (!sIosFrameWaitCallback || !sIosFrameWaitCallback(static_cast<double>(left) / _100NANOSECONDS_IN_SECOND)) {
+#endif
+            const timespec spec = { 0, left * 100 };
+            nanosleep(&spec, nullptr);
+#if defined(__IOS__)
+        }
+#endif
 #else
         // The accuracy of this mTimer seems to usually be within +- 1.0 ms
         LARGE_INTEGER li;
