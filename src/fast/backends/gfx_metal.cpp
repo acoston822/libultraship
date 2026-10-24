@@ -8,6 +8,7 @@
 #ifdef __APPLE__
 
 #include "fast/backends/gfx_metal.h"
+#include "fast/backends/ios_frame_wait.h"
 
 #include <vector>
 #include <algorithm>
@@ -29,6 +30,9 @@
 #include <Metal/Metal.hpp>
 
 #include <SDL_render.h>
+#ifdef __IOS__
+#include <SDL_timer.h>
+#endif
 #include <imgui_impl_metal.h>
 #include <spdlog/spdlog.h>
 #include <spdlog/fmt/fmt.h>
@@ -57,6 +61,14 @@ extern "C" void LUS_SetExternalDisplayLayer(void* layer) {
 
 // MARK: - Helpers
 namespace Fast {
+
+#ifdef __IOS__
+static void (*sIosDrawableWaitCallback)(double) = nullptr;
+
+void SetIosDrawableWaitCallback(void (*callback)(double)) {
+    sIosDrawableWaitCallback = callback;
+}
+#endif
 
 static MTL::SamplerAddressMode gfx_cm_to_metal(uint32_t val) {
     switch (val) {
@@ -1040,7 +1052,16 @@ void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t heigh
     }
 #endif
     mCurrentDrawable = nullptr;
+#ifdef __IOS__
+    const uint64_t drawableStarted = sIosDrawableWaitCallback ? SDL_GetPerformanceCounter() : 0;
+#endif
     mCurrentDrawable = mLayer->nextDrawable();
+#ifdef __IOS__
+    if (sIosDrawableWaitCallback) {
+        sIosDrawableWaitCallback(static_cast<double>(SDL_GetPerformanceCounter() - drawableStarted) /
+                                 SDL_GetPerformanceFrequency());
+    }
+#endif
 
     bool msaa_enabled = Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gMSAAValue", 1) > 1;
 
