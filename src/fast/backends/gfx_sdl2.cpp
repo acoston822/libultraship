@@ -319,7 +319,9 @@ void GfxWindowBackendSDL2::GetActiveWindowRefreshRate(uint32_t* refresh_rate) {
     *refresh_rate = mode.refresh_rate != 0 ? mode.refresh_rate : 60;
 }
 
+#ifndef __IOS__
 static uint64_t previous_time;
+#endif
 #ifdef _WIN32
 static HANDLE mTimer;
 #endif
@@ -830,12 +832,38 @@ bool GfxWindowBackendSDL2::IsWindowVisible() {
     return true;
 }
 
+#ifndef __IOS__
 static uint64_t qpc_to_100ns(uint64_t qpc) {
     const uint64_t qpc_freq = SDL_GetPerformanceFrequency();
     return qpc / qpc_freq * _100NANOSECONDS_IN_SECOND + qpc % qpc_freq * _100NANOSECONDS_IN_SECOND / qpc_freq;
 }
+#endif
 
 void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
+#ifdef __IOS__
+    const bool metalPacing =
+        Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gMetalPresentPacing", 1) != 0;
+    if (metalPacing != mIosMetalPacing) {
+        mIosFramePacer.Reset();
+        mIosMetalPacing = metalPacing;
+    }
+    const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
+    auto now = [frequency] { return static_cast<double>(SDL_GetPerformanceCounter()) / frequency; };
+    const double deadline = mIosFramePacer.NextDeadline(now(), mTargetFps);
+    // iOS must reach the full deadline. The macOS early-wake allowance below
+    // otherwise shortens every interval, and wake-up jitter shifts the cadence.
+    // Recheck after interrupted sleeps; service UIKit during the same wait when
+    // requested by the app, without increasing the game's frame limit.
+    for (double remaining = deadline - now(); remaining > 0; remaining = deadline - now()) {
+        if (sIosFrameWaitCallback && sIosFrameWaitCallback(remaining)) {
+            continue;
+        }
+        timespec spec;
+        spec.tv_sec = static_cast<time_t>(remaining);
+        spec.tv_nsec = static_cast<long>((remaining - static_cast<double>(spec.tv_sec)) * 1000000000.0);
+        nanosleep(&spec, nullptr);
+    }
+#else
     uint64_t t = qpc_to_100ns(SDL_GetPerformanceCounter());
 
     const int64_t next = previous_time + 10 * FRAME_INTERVAL_US_NUMERATOR / FRAME_INTERVAL_US_DENOMINATOR;
@@ -851,16 +879,8 @@ void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
 #endif
     if (left > 0) {
 #ifndef _WIN32
-#if defined(__IOS__)
-        // Native UIKit animations share SDL's main thread. Let the application
-        // service them during this existing wait without raising the game FPS.
-        if (!sIosFrameWaitCallback || !sIosFrameWaitCallback(static_cast<double>(left) / _100NANOSECONDS_IN_SECOND)) {
-#endif
-            const timespec spec = { 0, left * 100 };
-            nanosleep(&spec, nullptr);
-#if defined(__IOS__)
-        }
-#endif
+        const timespec spec = { 0, left * 100 };
+        nanosleep(&spec, nullptr);
 #else
         // The accuracy of this mTimer seems to usually be within +- 1.0 ms
         LARGE_INTEGER li;
@@ -884,6 +904,7 @@ void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
         t = next;
     }
     previous_time = t;
+#endif
 }
 
 void GfxWindowBackendSDL2::SwapBuffersBegin() {

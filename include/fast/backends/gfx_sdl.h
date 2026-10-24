@@ -1,6 +1,9 @@
 #pragma once
 
 #include "gfx_window_manager_api.h"
+#ifdef __IOS__
+#include "FramePacer.h"
+#endif
 namespace Fast {
 class GfxWindowBackendSDL2 final : public GfxWindowBackend {
   public:
@@ -43,6 +46,10 @@ class GfxWindowBackendSDL2 final : public GfxWindowBackend {
     bool IsFullscreen() override;
 
   private:
+#ifdef __IOS__
+    mutable FramePacer mIosFramePacer;
+    mutable bool mIosMetalPacing = true;
+#endif
     void SetFullscreenImpl(bool on, bool call_callback);
     void HandleSingleEvent(SDL_Event& event);
     int TranslateScancode(int scancode) const;
