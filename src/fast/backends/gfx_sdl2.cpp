@@ -16,6 +16,9 @@
 #include "ship/window/FileDropMgr.h"
 #include "fast/backends/gfx_sdl.h"
 #include "fast/backends/ios_frame_wait.h"
+#if defined(__IOS__)
+#include "fast/backends/IosWindowPlacement.h"
+#endif
 
 #ifdef __OpenBSD__
 #include <sys/sysctl.h>
@@ -449,6 +452,11 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
         mWindowWidth = (int)canvasW;
         mWindowHeight = (int)canvasH;
     }
+#endif
+#if defined(__IOS__)
+    // Always create the interactive window on the phone, even if AirPlay was
+    // connected before launch. Its separate game-only layer is managed by the app.
+    ConfigureIosMainWindow(posX, posY, mWindowWidth, mWindowHeight);
 #endif
     mWnd = SDL_CreateWindow(title, posX, posY, mWindowWidth, mWindowHeight, flags);
 #ifdef __EMSCRIPTEN__
